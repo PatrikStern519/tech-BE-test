@@ -1,9 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using System.Collections.ObjectModel;
-using System.Linq;
-using System.Threading.Tasks;
-using MessagePack.Internal;
+using TechTestBackend.Database;
+using TechTestBackend.Interface;
+using TechTestBackend.Models;
 
 namespace TechTestBackend.Controllers;
 
@@ -12,164 +10,151 @@ namespace TechTestBackend.Controllers;
 public class SpotifyController : ControllerBase
 {
     //constructors are obsolete should not be used anymore
-    // public SpotifyController()
-    // {
-    // }
+
+    //Never heard anything about constructors being obsolete, they seem pretty necessary :)
+
+    private readonly SongStorageDbContext _dbContext;
+    private readonly ILogger<SpotifyController> _logger;
+    private IApiMarker _apiMarker;
+
+    public SpotifyController(SongStorageDbContext dbContext, ILogger<SpotifyController> logger, IApiMarker apiMarker)
+    {
+        _dbContext = dbContext;
+        _logger = logger;
+        _apiMarker = apiMarker;
+    }
 
     [HttpGet]
     [Route("searchTracks")]
-    public IActionResult SearchTracks(string name)
-    {
-        try
-        {        
-            // TODO: Implement this method
-            object trak = SpotifyHelper.GetTracks(name);
 
-            return Ok(trak);
+    public async Task<IActionResult> SearchTracks(string artist)
+    {
+        List<SpotifySong> tracks = new();
+
+        try
+        {
+            tracks = await _apiMarker.GetTracks(artist);
         }
         catch (Exception e)
         {
-            // this is the best practice for not leaking error details
-            return NotFound();
+            _logger.LogError(e, e.Message);
         }
+
+        return Ok(tracks);
     }
 
     [HttpPost]
     [Route("like")]
-    public IActionResult Like(string id)
+    public async Task<IActionResult> Like(string id)
     {
-        object storage = HttpContext.RequestServices.GetService(typeof(SongstorageContext));
-        
-        var track = SpotifyHelper.GetTrack(id); //check if trak exists
-        if(track.Id == null || SpotifyId(id) == false)
-        {
-            return StatusCode(400);
-        }
+        ArgumentNullException.ThrowIfNull(_dbContext);
 
-        var song = new Soptifysong(); //create new song
-        song.Id = id;
-        song.Name = track.Name;
+        if (!SpotifyId(id))
+        {
+            return BadRequest();
+        }
 
         try
         {
+            var track = await _apiMarker.GetTrack(id); //check if track exists 
+
+            if (track is null)
+            {
+                return NotFound("The song isn't available in Spotify catalogue");
+            }
+
             //crashes sometimes for some reason
             // we   have to look into this
-            ((SongstorageContext)storage).Songs.Add(song);
-            
-            ((SongstorageContext)storage).SaveChanges();
+
+            //Earlier implementation could of crashed because of multiple reasons.
+
+            //Before the try phrase: 
+            // If the track was for any reason returned as null from the SpotifyHelper as a result of deserialization failure or failure in the request the application would throw an NullReferenceException when trying to check for track.id or using track.Name to populate the earlier created instance of SpotifySong.  
+
+            //During the try phrase:
+            // If the requested service of in-memory storage failed adding song will fail.
+            // Loading dbContext out of the HttpContext is not a good practice. We'll possibly loose connection to the initiated request context given response time of threads. Since SpotifyHelper uses async requests, very badly handled as well without awaits or thread safety the possibility of losing our request scoped instance of dbContext is likely. We'll use the recommended approach instead of DP Injection
+
+            _dbContext.Songs.Add(track); //Only adding in-memory before SaveAsync. Requirement dosn't mention I/O need for ID check up before creation in DB.
+
+            await _dbContext.SaveChangesAsync();
         }
         catch (Exception e)
         {
-            // not sure if this is the best way to handle this
-            return Ok();
+            _logger.LogError(e.Message, e);
         }
-        
+
         return Ok();
     }
-    
+
     [HttpPost]
     [Route("removeLike")]
-    public IActionResult RemoveLike(string id)
+    public async Task<IActionResult> RemoveLike(string id)
     {
-        object storage = HttpContext.RequestServices.GetService(typeof(SongstorageContext));
-        
-        var track = SpotifyHelper.GetTrack(id);
-        if(track.Id == null || SpotifyId(id) == false)
+        ArgumentNullException.ThrowIfNull(_dbContext);
+
+        if (!SpotifyId(id))
         {
-            return StatusCode(400); // bad request wrong id not existing in spotify
+            return BadRequest();
         }
 
-        var song = new Soptifysong();
-        song.Id = id;
-        
         try
         {
-            ((SongstorageContext)storage).Songs.Remove(song); // this is not working every tume
-            ((SongstorageContext)storage).SaveChanges();
+            var track = await _apiMarker.GetTrack(id); //check if track exists 
+
+            if (track is null)
+            {
+                return NotFound("The song isn't available on Spotify");
+            }
+
+            //Here was same issue as before without thread safety handling in async methods which can result in us loosing our requested scoped instance of dbContext during the call, so when trying to save, the dbContext is not there anymore.
+
+            _dbContext.Songs.Remove(track); // this is not working every time
+            await _dbContext.SaveChangesAsync();
         }
         catch (Exception e)
         {
-            // we should probably log this
-            return Ok();
+            _logger.LogError(e, e.Message);
         }
-        
+
         return Ok();
     }
-    
+
     [HttpGet]
     [Route("listLiked")]
-    public IActionResult ListLiked()
+    public async Task<IActionResult> ListLiked()
     {
-        object storage = HttpContext.RequestServices.GetService(typeof(SongstorageContext));
+        ArgumentNullException.ThrowIfNull(_dbContext);
 
-        int songsnumber = ((SongstorageContext)storage).Songs.Count();
-        List<Soptifysong> songs = new List<Soptifysong>(); //((SongstorageContext)storage).Songs.ToList();
+        var savedTracks = _dbContext.Songs.ToList();
+        List<SpotifySong> response = new();
 
-        if (songsnumber > 0)
+        foreach (var savedTrack in savedTracks)
         {
-            for (int i = 0; i <= songsnumber - 1; i++)
+            try
             {
-                string songid = ((SongstorageContext)HttpContext.RequestServices.GetService(typeof(SongstorageContext))).Songs.ToList()[i].Id;
-            
-                var track = SpotifyHelper.GetTrack(songid);
-                if(track.Id == null)
+                var track = await _apiMarker.GetTrack(savedTrack.Id);
+                if (track is null)
                 {
-                    // TODO: remove song from database, but not sure how
+                    _dbContext.Remove(savedTrack);
                 }
-                else
+                else if (!response.Any(s => s.Id == track.Id || s.Name == track.Name))
                 {
-                    // not working for some reason so we have to do the check manually for now
-                    // if(SongExists(track.Id) == false)
-                    
-                    int numerofsong = songs.Count();
-                    for (int num = 0; num <= numerofsong; num++)
-                    {
-                        try
-                        {
-                            if(songs[num].Id == songid)
-                            {
-                                break;
-                            }
-                            else if(num == numerofsong - 1)
-                            {
-
-                                for (int namenum = 0; namenum < numerofsong; namenum++)
-                                {
-                                    if(songs[namenum].Name == track.Name)
-                                    {
-                                        break; // we dont want to add the same song twice
-                                        //does this break work?
-                                    }
-                                    else if(namenum == numerofsong - 1)
-                                    {
-                                        songs.Add(((SongstorageContext)storage).Songs.ToList()[i]);
-                                    }
-                                }
-                            }
-                        }
-                        catch (Exception e)
-                        {
-                            // something went wrong, but it's not important
-                            songs.Add(((SongstorageContext)storage).Songs.ToList()[i]);
-                        }
-                    }
+                    response.Add(track);
                 }
             }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex.Message, ex);
+            }
         }
+        await _dbContext.SaveChangesAsync();
 
-        //save the changes, just in case
-        ((SongstorageContext)storage).SaveChanges();
-        
-        return Ok(songs);
+        return Ok(response);
     }
-    
-    private bool SongExists(string id)
+
+    private static bool SpotifyId(string id)
     {
-        return ((SongstorageContext)HttpContext.RequestServices.GetService(typeof(SongstorageContext))).Songs.First(e => e.Id == id) != null;
-    }
-    
-    private static bool SpotifyId(object id)
-    {
-        return id.ToString().Length == 22;
+        return id.Length == 22;
     }
 }
