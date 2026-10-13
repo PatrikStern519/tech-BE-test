@@ -1,14 +1,16 @@
-﻿using System.Text.Json.Serialization;
+﻿using Newtonsoft.Json;
 
 namespace TechTestBackend.Models
 {
     public class SpotifyTracksResponseModel
     {
-        public required SpotifyTracksModel TracksResponseModel { get; set; }
+        [JsonProperty("tracks")]
+        public required SpotifyTracksModel Tracks { get; set; }
     }
+
     public class SpotifyTracksModel
     {
-        [JsonPropertyName("tracks")]
-        public required List<SpotifySong> Tracks { get; set; }
+        [JsonProperty("items")]
+        public required List<SpotifySong> Items { get; set; }
     }
 }

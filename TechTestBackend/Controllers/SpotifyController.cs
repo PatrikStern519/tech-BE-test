@@ -27,13 +27,13 @@ public class SpotifyController : ControllerBase
     [HttpGet]
     [Route("searchTracks")]
 
-    public async Task<IActionResult> SearchTracks(string artist)
+    public async Task<IActionResult> SearchTracks(string artist, CancellationToken cancellationToken)
     {
         List<SpotifySong> tracks = new();
 
         try
         {
-            tracks = await _apiMarker.GetTracks(artist);
+            tracks = await _apiMarker.GetTracks(artist, cancellationToken);
         }
         catch (Exception e)
         {
@@ -45,7 +45,7 @@ public class SpotifyController : ControllerBase
 
     [HttpPost]
     [Route("like")]
-    public async Task<IActionResult> Like(string id)
+    public async Task<IActionResult> Like(string id, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(_dbContext);
 
@@ -56,7 +56,7 @@ public class SpotifyController : ControllerBase
 
         try
         {
-            var track = await _apiMarker.GetTrack(id); //check if track exists 
+            var track = await _apiMarker.GetTrack(id, cancellationToken); //check if track exists 
 
             if (track is null)
             {
@@ -77,7 +77,7 @@ public class SpotifyController : ControllerBase
 
             _dbContext.Songs.Add(track); //Only adding in-memory before SaveAsync. Requirement dosn't mention I/O need for ID check up before creation in DB.
 
-            await _dbContext.SaveChangesAsync();
+            await _dbContext.SaveChangesAsync(cancellationToken);
         }
         catch (Exception e)
         {
@@ -89,7 +89,7 @@ public class SpotifyController : ControllerBase
 
     [HttpPost]
     [Route("removeLike")]
-    public async Task<IActionResult> RemoveLike(string id)
+    public async Task<IActionResult> RemoveLike(string id, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(_dbContext);
 
@@ -100,7 +100,7 @@ public class SpotifyController : ControllerBase
 
         try
         {
-            var track = await _apiMarker.GetTrack(id); //check if track exists 
+            var track = await _apiMarker.GetTrack(id, cancellationToken); //check if track exists 
 
             if (track is null)
             {
@@ -110,7 +110,7 @@ public class SpotifyController : ControllerBase
             //Here was same issue as before without thread safety handling in async methods which can result in us loosing our requested scoped instance of dbContext during the call, so when trying to save, the dbContext is not there anymore.
 
             _dbContext.Songs.Remove(track); // this is not working every time
-            await _dbContext.SaveChangesAsync();
+            await _dbContext.SaveChangesAsync(cancellationToken);
         }
         catch (Exception e)
         {
@@ -122,7 +122,7 @@ public class SpotifyController : ControllerBase
 
     [HttpGet]
     [Route("listLiked")]
-    public async Task<IActionResult> ListLiked()
+    public async Task<IActionResult> ListLiked(CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(_dbContext);
 
@@ -133,7 +133,7 @@ public class SpotifyController : ControllerBase
         {
             try
             {
-                var track = await _apiMarker.GetTrack(savedTrack.Id);
+                var track = await _apiMarker.GetTrack(savedTrack.Id, cancellationToken);
                 if (track is null)
                 {
                     _dbContext.Remove(savedTrack);
@@ -148,7 +148,7 @@ public class SpotifyController : ControllerBase
                 _logger.LogError(ex.Message, ex);
             }
         }
-        await _dbContext.SaveChangesAsync();
+        await _dbContext.SaveChangesAsync(cancellationToken);
 
         return Ok(response);
     }

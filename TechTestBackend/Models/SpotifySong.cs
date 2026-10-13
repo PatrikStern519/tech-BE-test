@@ -1,12 +1,12 @@
 ﻿
-using System.Text.Json.Serialization;
+using Newtonsoft.Json;
 
 namespace TechTestBackend.Models;
 
 public class SpotifySong
 {
-    [JsonPropertyName("id")]
+    [JsonProperty("id")]
     public required string Id { get; set; }
-    [JsonPropertyName("name")]
+    [JsonProperty("name")]
     public required string Name { get; set; }
 }
